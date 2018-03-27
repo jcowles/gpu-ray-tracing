@@ -292,7 +292,7 @@ MonoBehaviour:
   FullScreenResolve: {fileID: 2100000, guid: 770f95e25cbbb7c468dddf886a4ba257, type: 2}
   FocusDistance: 6
   FocusObject: {fileID: 681876705}
-  Aperture: 0.22
+  Aperture: 0.0001
   MaxBounces: 16
   SphericalFibDebugMesh: {fileID: 65924950}
   m_sampleCount: 0

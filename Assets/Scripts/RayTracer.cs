@@ -24,6 +24,7 @@ public class RayTracer : MonoBehaviour {
   [Range(0.0001f, 2.5f)]
   public float Aperture;
 
+  [Range(1, 64)]
   public int MaxBounces = 1;
 
   public MeshFilter SphericalFibDebugMesh;
@@ -41,7 +42,6 @@ public class RayTracer : MonoBehaviour {
   private bool m_sceneChanged = false;
 
   // The maximum number of bounces before terminating a ray.
-  [Range(1, 64)]
   private int m_maxBounces = 1;
 
   private float m_lastAperture = -1;
