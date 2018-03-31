@@ -92,11 +92,6 @@ bool Color(inout Ray r, vec2 uv) {
 
   r.bounces++;
 
-  if (r.bounces >= _MaxBounces) {
-    r.color = r.color * vec3(0,0,0);
-    return false;
-  }
-
   if (HitSpheres(r, 0.001, FLT_MAX, rec)) {
     rec.uv = uv;
     Ray scattered = r;
@@ -112,10 +107,13 @@ bool Color(inout Ray r, vec2 uv) {
       scattered.color = r.color * attenuation;
       r = scattered;
       return true;
+    } else {
+      return false;
     }
+  } else {
+    r.color *= EnvColor(r, uv);
+    return false;
   }
-
-  return false;
 }
 
 // ---------------------------------------------------------------------------------------------- //
@@ -219,7 +217,7 @@ Ray InitCameraRay(vec2 uv) {
   r.origin = rayStart.xyz;
   r.direction = rayEnd.xyz - rayStart.xyz;
   r.bounces = 0;
-  r.color = EnvColor(r, uv);
+  r.color = vec3(1, 1, 1);
   r.material = kMaterialInvalid;
 
   return r;
