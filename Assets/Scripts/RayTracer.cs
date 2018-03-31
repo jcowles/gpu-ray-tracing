@@ -74,8 +74,6 @@ public class RayTracer : MonoBehaviour {
 
   private ComputeBuffer m_raysBuffer;
 
-  private int m_bounceCount;
-
   private System.Random m_rng = new System.Random();
 
   // The number of super sampled rays to schedule.
@@ -206,7 +204,6 @@ public class RayTracer : MonoBehaviour {
     m_lastAperture = -1;
 
     m_sampleCount = 0;
-    m_bounceCount = MaxBounces;
 
     // Make sure we start from a clean slate.
     // Under normal circumstances, this does nothing.
@@ -311,31 +308,22 @@ public class RayTracer : MonoBehaviour {
       rayEnd = Camera.main.projectionMatrix.inverse.MultiplyPoint(rayEnd);
 
       m_maxBounces = MaxBounces;
-      m_bounceCount = MaxBounces;
       m_sampleCount = 0;
-      RayTraceKernels.Dispatch(m_flattenSamplesKernel, m_accumulatedImage.width / 8, m_accumulatedImage.height / 8, 1);
-
-      RayTraceKernels.Dispatch(m_initCameraRaysKernel,
+      RayTraceKernels.Dispatch(m_flattenSamplesKernel,
                                m_accumulatedImage.width / 8,
-                               m_accumulatedImage.height / 8, m_superSamplingFactor);
+                               m_accumulatedImage.height / 8,
+                               1);
     }
 
-    if (m_bounceCount >= MaxBounces / 12) {
-      m_bounceCount = 0;
-      m_sampleCount++;
-      RayTraceKernels.Dispatch(m_initCameraRaysKernel,
-                               m_accumulatedImage.width / 8,
-                               m_accumulatedImage.height / 8, m_superSamplingFactor);
-    }
+    m_sampleCount++;
+    RayTraceKernels.Dispatch(m_initCameraRaysKernel,
+                              m_accumulatedImage.width / 8,
+                              m_accumulatedImage.height / 8, m_superSamplingFactor);
 
-    m_bounceCount++;
 
     float t = Time.time;
     RayTraceKernels.SetVector("_Time", new Vector4(t / 20, t, t * 2, t * 3));
     RayTraceKernels.SetFloat("_MaxBounces", MaxBounces);
-    RayTraceKernels.SetFloat("_BounceCount", m_bounceCount);
-    Shader.SetGlobalInt("_MaxBounces", MaxBounces);
-    Shader.SetGlobalInt("_BounceCount", m_bounceCount);
 
     RayTraceKernels.Dispatch(m_rayTraceKernel,
                              m_accumulatedImage.width / 8,
