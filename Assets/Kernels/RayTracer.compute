@@ -253,9 +253,6 @@ void RayTrace(uint3 id : SV_DispatchThreadID,
 
   GetNextRay(id, rayCount, width, height, /*outputs*/ xy, uv, rayIndex, r);
   if (length(r.direction) == 0) {
-    // TODO: reinitialize the camera ray here.
-    //uv.y = 1 - uv.y;
-    //r = InitCameraRay(uv);
     return;
   }
 
