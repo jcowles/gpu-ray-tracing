@@ -29,6 +29,7 @@ struct Ray {
   vec3 origin;
   vec3 direction;
   vec3 color;
+  vec4 accumColor;
   int  bounces;
   int  material;
 

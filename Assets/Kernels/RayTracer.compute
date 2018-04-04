@@ -14,7 +14,7 @@
 
 #pragma kernel RayTrace
 #pragma kernel InitCameraRays
-#pragma kernel FlattenSamples
+#pragma kernel NormalizeSamples
 
 // ---------------------------------------------------------------------------------------------- //
 // Data Structures, Sampling, and Shading.
@@ -39,7 +39,7 @@ float _Aperture;
 float _FocusDistance;
 int _ActiveMaterial;
 
-RWTexture2D<float4> _MainTex;
+Texture2D<float4> _AccumulatedImage;
 StructuredBuffer<Sphere> _Spheres;
 RWStructuredBuffer<Ray> _Rays;
 
@@ -140,6 +140,8 @@ void GetNextRay(uint3 id, uint rayCount, uint width, uint height,
   // The array counter points to the last processed ray and is incremented to process the next ray.
   //
   rayIndex = _Rays.IncrementCounter() % rayCount;
+  //rayIndex = ((id.x * height + id.y) + (width * height * id.z)) % rayCount;
+
   ray = _Rays[rayIndex];
 
   //
@@ -218,6 +220,7 @@ Ray InitCameraRay(vec2 uv) {
   r.direction = rayEnd.xyz - rayStart.xyz;
   r.bounces = 0;
   r.color = vec3(1, 1, 1);
+  r.accumColor = vec4(0, 0, 0, 0);
   r.material = kMaterialInvalid;
 
   return r;
@@ -237,7 +240,7 @@ void RayTrace(uint3 id : SV_DispatchThreadID,
 {
   uint width;
   uint height;
-  _MainTex.GetDimensions(width, height);
+  _AccumulatedImage.GetDimensions(width, height);
 
   uint rayCount;
   uint stride;
@@ -261,22 +264,18 @@ void RayTrace(uint3 id : SV_DispatchThreadID,
   r.direction = normalize(r.direction);
   bool scattered = Color(r, uv);
     
-  if (scattered) {
-    // This could write the value back less frequently, to save bandwidth.
-    _Rays[rayIndex] = r;
-  }
-
-  if (r.bounces >= _MaxBounces || !scattered) {
+  if (r.bounces > _MaxBounces || !scattered) {
     // Alpha is actually our sample count, which is used to normalize the accumulated
     // output; by setting alpha=1 here, 1 is added to the sample count for this pixel.
-    _MainTex[xy] += vec4(r.color, 1);
+    r.accumColor += vec4(lerp(r.color, float3(0,0,0), r.bounces > _MaxBounces), 1);
     
     r.origin = vec3(0,0,0);
     r.direction = vec3(0,0,0);
     r.color = vec3(0,0,0);
     r.bounces = 0;
-    _Rays[rayIndex] = r;
   }
+
+  _Rays[rayIndex] = r;
 }
 
 // ---------------------------------------------------------------------------------------------- //
@@ -290,7 +289,7 @@ void InitCameraRays(uint3 id : SV_DispatchThreadID,
 {
   uint width;
   uint height;
-  _MainTex.GetDimensions(width, height);
+  _AccumulatedImage.GetDimensions(width, height);
   
   int rayIndex = (id.x * height + id.y) + (width * height * id.z);
 
@@ -307,25 +306,28 @@ void InitCameraRays(uint3 id : SV_DispatchThreadID,
   uv += (Noise(uv * 10000 + id.z * 100 + _Time.y) - .5)
       * vec2(1.0 / width, 1.0 / height);
 
-  _Rays[rayIndex] = InitCameraRay(uv);
+  Ray r = InitCameraRay(uv);
+  r.accumColor = _Rays[rayIndex].accumColor;
+  _Rays[rayIndex] = r;
 }
 
 // ---------------------------------------------------------------------------------------------- //
-// Accumulation Flattening Kernel.
+// Accumulation Normalizing Kernel.
 // ---------------------------------------------------------------------------------------------- //
 
 [numthreads(8,8,1)]
-void FlattenSamples(uint3 id : SV_DispatchThreadID)
+void NormalizeSamples(uint3 id : SV_DispatchThreadID)
 {
-  vec4 color = _MainTex[id.xy];
-
+  uint width;
+  uint height;
+  _AccumulatedImage.GetDimensions(width, height);
+  
+  //
   // The max() avoids div/0 and min avoids HDR ghosting for very bright values.
-  color = min(1, color / max(1, color.a));
-
-  // A magic number to control how much to weight the last image before a reset; tuned to taste.
-  // This explicitly introduces N samples of error into the final result, but with a very large
-  // number of correct samples, is should become insignificant.
-  color *= 15;
-
-  _MainTex[id.xy] = color;
+  //
+  int rayIndex = (id.x * height + id.y) + (width * height * id.z);
+  _Rays[rayIndex].accumColor = min(1, 
+                                   _Rays[rayIndex].accumColor
+                                      / max(1, _Rays[rayIndex].accumColor.a));
+  _Rays[rayIndex].accumColor /= 8;
 }

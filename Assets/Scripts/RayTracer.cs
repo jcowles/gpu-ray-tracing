@@ -25,7 +25,6 @@ public class RayTracer : MonoBehaviour {
   // The main accumulation texture.
   public RenderTexture MainTexture;
 
-
   public ComputeShader RayTraceKernels;
   public Material FullScreenResolve;
 
@@ -65,7 +64,7 @@ public class RayTracer : MonoBehaviour {
 
   private int m_initCameraRaysKernel;
   private int m_rayTraceKernel;
-  private int m_flattenSamplesKernel;
+  private int m_normalizeSamplesKernel;
 
   private RenderTexture m_accumulatedImage;
 
@@ -81,7 +80,7 @@ public class RayTracer : MonoBehaviour {
 
   // The number of bounces per pixel to schedule.
   // This number will be multiplied by m_superSamplingFactor on Dispatch.
-  private int m_bouncesPerPixel = 6;
+  private int m_bouncesPerPixel = 8;
 
   private ComputeBuffer m_fibSamples;
 
@@ -214,14 +213,19 @@ public class RayTracer : MonoBehaviour {
     m_accumulatedImage.enableRandomWrite = true;
     m_accumulatedImage.Create();
 
+    RenderTexture.active = m_accumulatedImage;
+    GL.Clear(false, true, new Color(0, 0, 0, 0));
+    RenderTexture.active = null;
+
     // Local constants make the next lines signfinicantly more readable.
     const int kBytesPerFloat = sizeof(float);
-    const int kFloatsPerRay = 9;
-    int numPixels = m_accumulatedImage.width * m_accumulatedImage.height * m_superSamplingFactor;
+    const int kFloatsPerRay = 13;
+    int numPixels = m_accumulatedImage.width * m_accumulatedImage.height;
+    int numRays = numPixels * m_superSamplingFactor;
 
     // IMPORTANT NOTE: the byte size below must match the shader, not C#! In this case they match.
-    m_raysBuffer = new ComputeBuffer(numPixels,
-                                     kBytesPerFloat * kFloatsPerRay + sizeof(int),
+    m_raysBuffer = new ComputeBuffer(numRays,
+                                     kBytesPerFloat * kFloatsPerRay + sizeof(int) + sizeof(int),
                                      ComputeBufferType.Counter);
 
     var samples = new Vector3[4096];
@@ -234,7 +238,7 @@ public class RayTracer : MonoBehaviour {
 
     // Setup the RayTrace kernel.
     m_rayTraceKernel = RayTraceKernels.FindKernel("RayTrace");
-    RayTraceKernels.SetTexture(m_rayTraceKernel, "_MainTex", m_accumulatedImage);
+    RayTraceKernels.SetTexture(m_rayTraceKernel, "_AccumulatedImage", m_accumulatedImage);
     RayTraceKernels.SetBuffer(m_rayTraceKernel, "_Spheres", m_spheresBuffer);
     RayTraceKernels.SetBuffer(m_rayTraceKernel, "_Rays", m_raysBuffer);
     RayTraceKernels.SetBuffer(m_rayTraceKernel, "_HemisphereSamples", m_fibSamples);
@@ -243,15 +247,15 @@ public class RayTracer : MonoBehaviour {
     m_initCameraRaysKernel = RayTraceKernels.FindKernel("InitCameraRays");
     RayTraceKernels.SetBuffer(m_initCameraRaysKernel, "_Rays", m_raysBuffer);
     RayTraceKernels.SetBuffer(m_initCameraRaysKernel, "_Spheres", m_spheresBuffer);
-    RayTraceKernels.SetTexture(m_initCameraRaysKernel, "_MainTex", m_accumulatedImage);
+    RayTraceKernels.SetTexture(m_initCameraRaysKernel, "_AccumulatedImage", m_accumulatedImage);
     RayTraceKernels.SetBuffer(m_initCameraRaysKernel, "_HemisphereSamples", m_fibSamples);
 
-    // Setup the sampler falttener kernel.
-    m_flattenSamplesKernel = RayTraceKernels.FindKernel("FlattenSamples");
-    RayTraceKernels.SetBuffer(m_flattenSamplesKernel, "_Rays", m_raysBuffer);
-    RayTraceKernels.SetBuffer(m_flattenSamplesKernel, "_Spheres", m_spheresBuffer);
-    RayTraceKernels.SetTexture(m_flattenSamplesKernel, "_MainTex", m_accumulatedImage);
-    RayTraceKernels.SetBuffer(m_flattenSamplesKernel, "_HemisphereSamples", m_fibSamples);
+    // Setup the NormalizeSamples kernel.
+    m_normalizeSamplesKernel = RayTraceKernels.FindKernel("NormalizeSamples");
+    RayTraceKernels.SetBuffer(m_normalizeSamplesKernel, "_Rays", m_raysBuffer);
+    RayTraceKernels.SetBuffer(m_normalizeSamplesKernel, "_Spheres", m_spheresBuffer);
+    RayTraceKernels.SetTexture(m_normalizeSamplesKernel, "_AccumulatedImage", m_accumulatedImage);
+    RayTraceKernels.SetBuffer(m_normalizeSamplesKernel, "_HemisphereSamples", m_fibSamples);
 
     // DOF parameter defaults.
     RayTraceKernels.SetFloat("_Aperture", 2.0f);
@@ -309,10 +313,11 @@ public class RayTracer : MonoBehaviour {
 
       m_maxBounces = MaxBounces;
       m_sampleCount = 0;
-      RayTraceKernels.Dispatch(m_flattenSamplesKernel,
+
+      RayTraceKernels.Dispatch(m_normalizeSamplesKernel,
                                m_accumulatedImage.width / 8,
                                m_accumulatedImage.height / 8,
-                               1);
+                               m_superSamplingFactor);
     }
 
     m_sampleCount++;
@@ -323,7 +328,7 @@ public class RayTracer : MonoBehaviour {
 
     float t = Time.time;
     RayTraceKernels.SetVector("_Time", new Vector4(t / 20, t, t * 2, t * 3));
-    RayTraceKernels.SetFloat("_MaxBounces", MaxBounces);
+    RayTraceKernels.SetInt("_MaxBounces", MaxBounces);
 
     RayTraceKernels.Dispatch(m_rayTraceKernel,
                              m_accumulatedImage.width / 8,
@@ -332,6 +337,20 @@ public class RayTracer : MonoBehaviour {
   }
 
   void OnRenderImage(RenderTexture source, RenderTexture dest) {
-    Graphics.Blit(m_accumulatedImage, dest, FullScreenResolve);
+    // Resolve the final color directly from the ray accumColor.
+    FullScreenResolve.SetBuffer("_Rays", m_raysBuffer);
+
+    // Blit the rays into the accumulated image.
+    // This isn't necessary, though it implicitly applies a box filter to the accumulated color,
+    // which reduces aliasing artifacts when the viewport size doesn't match the underlying texture
+    // size (should only be a problem in-editor).
+    FullScreenResolve.SetVector("_AccumulatedImageSize",
+                                new Vector2(m_accumulatedImage.width, m_accumulatedImage.height));
+    Graphics.Blit(dest, m_accumulatedImage, FullScreenResolve);
+
+    // Simple copy from accumulated image to viewport, the filter is applied here.
+    // This extra copy and the associated texture could be skipped by filtering the ray colors
+    // directly in the full screen resolve shader.
+    Graphics.Blit(m_accumulatedImage, dest);
   }
 }

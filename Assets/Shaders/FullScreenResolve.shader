@@ -12,12 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-Shader "Rtiow/FullScreenResolve"
+Shader "GpuRayTracing/FullScreenResolve"
 {
   Properties
   {
-    _MainTex ("Texture", 2D) = "white" {}
-    _BlueNoise ("Texture", 2D) = "white" {}
   }
   SubShader
   {
@@ -30,9 +28,12 @@ Shader "Rtiow/FullScreenResolve"
       CGPROGRAM
         #pragma vertex vert
         #pragma fragment frag
-        #pragma target 3.0
+        #pragma target 5.0
       
         #include "UnityCG.cginc"
+        #include "../Kernels/Structures.cginc"
+
+        StructuredBuffer<Ray> _Rays;
 
         struct appdata
         {
@@ -54,44 +55,30 @@ Shader "Rtiow/FullScreenResolve"
           return o;
         }
       
-        sampler2D _MainTex;
-        float4 _MainTex_TexelSize;
-        sampler2D _BlueNoise;
-
-        float4 Sample(float2 uv, float2 offset) {
-          return tex2D(_MainTex, uv + _MainTex_TexelSize.xy * offset);
-        }
-
-        void Accum(float4 append, inout float4 sum) {
-          sum += (append / append.a);
-        }
+        float2 _AccumulatedImageSize;
 
         float4 frag (v2f i) : SV_Target {
-          float4 col0 = Sample(i.uv, float2(0,  0)); //tex2D(_MainTex, i.uv);
-          float4 col2 = float4(0, 0, 0, 0);
+          float2 size = _AccumulatedImageSize;
+          int2 xy = i.uv * size;
 
-          //
-          // Ultra hacky "+" blur kernel.
-          //
-          Accum(Sample(i.uv, float2( 0,  1)), col2);
-          Accum(Sample(i.uv, float2( 0, -1)), col2);
-          Accum(Sample(i.uv, float2( 1,  0)), col2);
-          Accum(Sample(i.uv, float2(-1,  0)), col2);
-          Accum(.5 * Sample(i.uv, float2( 0,  1) * 2), col2);
-          Accum(.5 * Sample(i.uv, float2( 0, -1) * 2), col2);
-          Accum(.5 * Sample(i.uv, float2( 1,  0) * 2), col2);
-          Accum(.5 * Sample(i.uv, float2(-1,  0) * 2), col2);
-          
-          // For col0 and col2, RGB is accumulated color and A is the sample count.
-          // So RGBA / A = normalized color with A = 1.0.
+          uint rayCount, stride;
+          _Rays.GetDimensions(rayCount, stride);
 
-          float sampleCount = col0.a;
+          float4 color = float4(0, 0, 0, 0);
 
-          col0 /= col0.a;
-          col2 /= col2.a;
+          for (int z = 0; z < 8; z++) {
+            int rayIndex = xy.x * size.y
+                         + xy.y
+                         + size.x * size.y * (z);
 
-          float blend = 1.0 / max(1, sampleCount / 20);
-          return lerp(col0, col2, blend);
+            color += _Rays[rayIndex % rayCount].accumColor;
+          }
+
+          // Note that the blur from the blog post is no longer applied, but could
+          // be done here or in the transfer from accumulated image to screen.
+
+          // Normalize by sample count.
+          return color / color.a;
         }
       ENDCG
     }
